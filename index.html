@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Snake Game</title>
+  <style>
+    :root{ --bg:#0f1724; --panel:#0b1220; --accent:#10b981; --muted:#94a3b8; }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;padding:20px;background:linear-gradient(180deg,#071021,#081426);color:var(--muted)}
+    .wrap{width:min(860px,96vw);display:grid;grid-template-columns:1fr 320px;gap:18px}
+    @media (max-width:880px){.wrap{grid-template-columns:1fr;}}
+
+    .game-card{background:var(--panel);border-radius:12px;padding:16px;box-shadow:0 8px 30px rgba(2,6,23,.6);display:flex;flex-direction:column;align-items:center}
+    canvas{background:#071124;border-radius:8px}
+
+    .side{background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border-radius:12px;padding:16px;color:#dbeafe}
+    h1{margin:0 0 6px 0;font-size:20px}
+    p.small{margin:6px 0 12px 0;color:var(--muted);font-size:13px}
+
+    .controls{display:flex;gap:8px;flex-wrap:wrap}
+    button{background:#071124;border:1px solid rgba(255,255,255,0.04);padding:8px 12px;border-radius:8px;color:#dbeafe;cursor:pointer}
+    button.primary{background:var(--accent);border:none;color:#042018}
+    .stat{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px dashed rgba(255,255,255,0.03)}
+    .stat strong{font-size:18px;color:var(--accent)}
+
+    .hint{margin-top:8px;font-size:13px;color:var(--muted)}
+    .footer{margin-top:12px;font-size:12px;color:var(--muted)}
+
+    .touchpad{display:none;margin-top:12px}
+    @media (max-width:600px){.touchpad{display:block}}
+    .pad{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .pad button{padding:16px;font-size:18px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="game-card">
+      <h1 style="color:#dbeafe">Snake — Smooth</h1>
+      <p class="small">Fluid snake movement — arrow keys / WASD / swipe. Five food pieces appear at once.</p>
+      <canvas id="game" width="600" height="600"></canvas>
+      <div style="width:100%;display:flex;justify-content:center;margin-top:12px;gap:8px">
+        <button id="startBtn" class="primary">Start / Resume</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+      <div class="touchpad" aria-hidden="true">
+        <div class="pad">
+          <button data-dir="up">▲</button>
+          <button data-dir="down">▼</button>
+          <button data-dir="left">◀</button>
+          <button data-dir="right">▶</button>
+        </div>
+      </div>
+    </div>
+
+    <aside class="side">
+      <h1>Stats & Settings</h1>
+      <p class="small">Score and settings. Speed now controls snake's step interval but movement is interpolated for smoothness.</p>
+      <div class="stat"><span>Score</span><strong id="score">0</strong></div>
+      <div class="stat"><span>Highscore</span><strong id="high">0</strong></div>
+      <div style="margin-top:12px">
+        <label style="font-size:13px;color:var(--muted)">Speed (ms per step)</label>
+        <input id="speedRange" type="range" min="60" max="300" step="10" value="120" style="width:100%">
+        <div style="display:flex;justify-content:space-between;font-size:13px;color:var(--muted)"><span>Fast</span><span>Slow</span></div>
+      </div>
+      <div style="margin-top:12px">
+        <label style="font-size:13px;color:var(--muted)">Grid size</label>
+        <select id="gridSelect" style="width:100%;padding:8px;border-radius:8px;margin-top:6px;background:#071124;color:#dbeafe;border:1px solid rgba(255,255,255,0.03)">
+          <option value="15">15x15</option>
+          <option value="20" selected>20x20</option>
+          <option value="25">25x25</option>
+          <option value="30">30x30</option>
+        </select>
+      </div>
+
+      <div class="hint">Tips: Use short taps for direction changes. Avoid reversing direction instantly (no 180° turn).</div>
+      <div class="footer">
+        Copyright © Damkee22 
+      </div>
+    </aside>
+  </div>
+
+
+
+
+
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const startBtn = document.getElementById('startBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resetBtn = document.getElementById('resetBtn');
+    const scoreEl = document.getElementById('score');
+    const highEl = document.getElementById('high');
+    const speedRange = document.getElementById('speedRange');
+    const gridSelect = document.getElementById('gridSelect');
+
+    let grid = 20;
+    let cellSize = canvas.width / grid;
+    let snake = []; // segments with smooth positions
+    let dir = {x:1,y:0};
+    let nextDir = {x:1,y:0};
+    let foods = [];
+    const FOOD_COUNT = 5;
+    let score = 0;
+    let high = Number(localStorage.getItem('snake_high')||0);
+    highEl.textContent = high;
+
+    let running = false;
+    let stepInterval = Number(speedRange.value); // ms per grid step
+    let lastStep = 0;
+    let lastTime = 0;
+
+    // We'll keep logical positions (integers) and render positions (pixels) that interpolate
+    function initSnake(){
+      snake = [];
+      const mid = Math.floor(grid/2);
+      // create initial snake of length 4 horizontally
+      for(let i=0;i<4;i++){
+        snake.push({
+          // logical grid position (integers)
+          gx: mid - i,
+          gy: mid,
+          // render position in pixels (for interpolation)
+          rx: (mid - i) * cellSize,
+          ry: mid * cellSize
+        });
+      }
+      dir = {x:1,y:0}; nextDir = {x:1,y:0};
+    }
+
+    function placeFoods(){
+      foods = [];
+      while(foods.length < FOOD_COUNT){
+        const fx = Math.floor(Math.random()*grid);
+        const fy = Math.floor(Math.random()*grid);
+        if(snake.some(s=>s.gx===fx && s.gy===fy)) continue;
+        if(foods.some(f=>f.x===fx && f.y===fy)) continue;
+        foods.push({x:fx,y:fy});
+      }
+    }
+
+    function resetGame(){
+      grid = Number(gridSelect.value);
+      cellSize = canvas.width / grid;
+      initSnake();
+      placeFoods();
+      score = 0; scoreEl.textContent = score;
+      running = false;
+      stepInterval = Number(speedRange.value);
+      lastStep = 0; lastTime = performance.now();
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      // background
+      ctx.fillStyle = '#071124'; ctx.fillRect(0,0,canvas.width,canvas.height);
+
+      // draw foods
+      for(const f of foods){
+        const px = f.x * cellSize; const py = f.y * cellSize;
+        ctx.fillStyle = '#ef4444';
+        roundRect(px + cellSize*0.12, py + cellSize*0.12, cellSize*0.76, cellSize*0.76, 6);
+      }
+
+      // draw snake (rendered positions)
+      for(let i=0;i<snake.length;i++){
+        const s = snake[i];
+        const isHead = i===0;
+        ctx.fillStyle = isHead ? '#10b981' : '#064e3b';
+        roundRect(s.rx+2, s.ry+2, cellSize-4, cellSize-4, 6);
+      }
+
+      // score small
+    }
+
+    function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); ctx.fill(); }
+
+    function stepLogic(){
+      // apply nextDir (no 180 turn)
+      if(!(nextDir.x === -dir.x && nextDir.y === -dir.y)) dir = {...nextDir};
+
+      // compute new head logical position
+      const head = snake[0];
+      const newGx = head.gx + dir.x;
+      const newGy = head.gy + dir.y;
+
+      // wall collision
+      if(newGx < 0 || newGx >= grid || newGy < 0 || newGy >= grid){ gameOver(); return; }
+
+      // self collision (check all segments)
+      if(snake.some(seg => seg.gx===newGx && seg.gy===newGy)) { gameOver(); return; }
+
+      // add new head
+      const newHead = { gx: newGx, gy: newGy, rx: newGx * cellSize, ry: newGy * cellSize };
+      snake.unshift(newHead);
+
+      // check food collision (any of the foods)
+      const eatenIndex = foods.findIndex(f => f.x===newGx && f.y===newGy);
+      if(eatenIndex !== -1){
+        // increase score
+        score += 10; scoreEl.textContent = score;
+        // remove that food and spawn a new one somewhere else (keep count constant)
+        foods.splice(eatenIndex,1);
+        spawnFood();
+      } else {
+        // remove tail (normal move)
+        snake.pop();
+      }
+    }
+
+    function spawnFood(){
+      // spawn single food keeping total FOOD_COUNT
+      while(foods.length < FOOD_COUNT){
+        const fx = Math.floor(Math.random()*grid);
+        const fy = Math.floor(Math.random()*grid);
+        if(snake.some(s=>s.gx===fx && s.gy===fy)) continue;
+        if(foods.some(f=>f.x===fx && f.y===fy)) continue;
+        foods.push({x:fx,y:fy});
+      }
+    }
+
+    function gameOver(){
+      running = false;
+      if(score>high){ high = score; localStorage.setItem('snake_high', high); highEl.textContent = high; }
+      setTimeout(()=>{ alert('Game over! Score: '+score); }, 50);
+    }
+
+    // interpolation for smooth movement
+    function updateRenderPositions(delta){
+      // Determine progress between steps: progress = elapsedSinceLastStep / stepInterval
+      // We won't store elapsed since last step globally here; instead we'll lerp each segment towards its target pixel position.
+      // The target pixel for a segment is gx*cellSize, gy*cellSize. We'll move rx,ry towards that target by a fraction depending on delta and stepInterval.
+      const lerpFactor = Math.min(1, delta / Math.max(16, stepInterval)); // smoother when stepInterval larger
+      for(const seg of snake){
+        const tx = seg.gx * cellSize;
+        const ty = seg.gy * cellSize;
+        seg.rx += (tx - seg.rx) * lerpFactor;
+        seg.ry += (ty - seg.ry) * lerpFactor;
+      }
+    }
+
+    function loop(now){
+      if(!lastTime) lastTime = now;
+      const delta = now - lastTime;
+      lastTime = now;
+
+      if(running){
+        lastStep += delta;
+        if(lastStep >= stepInterval){
+          // perform one logical step; allow multiple steps if lagging
+          const steps = Math.floor(lastStep / stepInterval);
+          for(let i=0;i<steps;i++){
+            stepLogic();
+            lastStep -= stepInterval;
+          }
+        }
+      }
+
+      updateRenderPositions(delta);
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    // controls
+    window.addEventListener('keydown', (e)=>{
+      const k = e.key.toLowerCase();
+      if(k==='arrowup' || k==='w') nextDir = {x:0,y:-1};
+      if(k==='arrowdown' || k==='s') nextDir = {x:0,y:1};
+      if(k==='arrowleft' || k==='a') nextDir = {x:-1,y:0};
+      if(k==='arrowright' || k==='d') nextDir = {x:1,y:0};
+      if(k===' '){ if(running) pause(); else start(); }
+    });
+
+    startBtn.addEventListener('click', ()=>start());
+    pauseBtn.addEventListener('click', ()=>pause());
+    resetBtn.addEventListener('click', ()=>{ resetGame(); draw(); });
+
+    // touch swipe
+    let touchStart = null;
+    canvas.addEventListener('touchstart', e=>{ touchStart = e.changedTouches[0]; });
+    canvas.addEventListener('touchend', e=>{
+      if(!touchStart) return; const t = e.changedTouches[0];
+      const dx = t.clientX - touchStart.clientX; const dy = t.clientY - touchStart.clientY;
+      if(Math.abs(dx) > Math.abs(dy)){
+        if(dx>20) nextDir = {x:1,y:0}; else if(dx<-20) nextDir = {x:-1,y:0};
+      } else {
+        if(dy>20) nextDir = {x:0,y:1}; else if(dy<-20) nextDir = {x:0,y:-1};
+      }
+      touchStart = null; start();
+    });
+
+    document.querySelectorAll('.pad button').forEach(b=>b.addEventListener('click', ()=>{
+      const d = b.dataset.dir;
+      if(d==='up') nextDir={x:0,y:-1};
+      if(d==='down') nextDir={x:0,y:1};
+      if(d==='left') nextDir={x:-1,y:0};
+      if(d==='right') nextDir={x:1,y:0};
+      start();
+    }));
+
+    // settings handlers
+    speedRange.addEventListener('input', ()=>{
+      stepInterval = Number(speedRange.value);
+    });
+    gridSelect.addEventListener('change', ()=>{ resetGame(); draw(); });
+
+    function start(){ if(running) return; running = true; lastStep = 0; }
+    function pause(){ running = false; }
+
+    // init
+    resetGame();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
